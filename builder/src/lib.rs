@@ -43,11 +43,36 @@ fn gen_builder_struct(origin_name: &str, data: &Data) -> proc_macro2::TokenStrea
     });
     
     // make builder struct name
-    let builder_name = format_ident!("_{origin_name}");
+    let builder_name = format_ident!("{origin_name}Builder");
 
     quote! {
         pub struct #builder_name {
             #(#fields_iter)*
         }
     }
+}
+
+fn gen_impl(input: &DeriveInput) -> proc_macro2::TokenStream {
+
+    todo!();
+}
+
+fn get_fields_iter(input: &DeriveInput) -> impl Iterator<Item = proc_macro2::TokenStream> {
+    let struct_data = match &input.data {
+        Data::Struct(s) => s,
+        _ => panic!("Builder must be a named fields struct")
+    };
+    let named_fields = match &struct_data.fields {
+        syn::Fields::Named(n) => n,
+        _ => panic!("Builder must be a named fields struct")
+    };
+    let fields_iter = named_fields.named.iter().map(|f| {
+        let f = f.clone();
+        let field_name = f.ident.expect("named field");
+        let typ = f.ty;
+        quote! {
+            #field_name: Option<#typ>,
+        }
+    });
+    fields_iter
 }
