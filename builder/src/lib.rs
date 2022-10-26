@@ -12,11 +12,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let builder_struct = gen_builder_struct(&input);
     let implementation = gen_impl(&input);
     let builder_setter = gen_builder_setter(&input);
+    let builder_impl = gen_builder_impl(&input);
 
     let expanded = quote! {
         #builder_struct
         #implementation
         #builder_setter
+        #builder_impl
     };
 
     proc_macro::TokenStream::from(expanded)
@@ -33,7 +35,7 @@ fn gen_impl(input: &DeriveInput) -> proc_macro2::TokenStream {
     let field_iter = get_field_iter(input);
     let field_asign_none_value = field_iter.map(|f| {
         let field = f.clone();
-        let name = field.ident;
+        let name = field.ident.unwrap();
         quote! {
             #name: None,
         }
@@ -89,7 +91,7 @@ fn gen_builder_setter(input: &DeriveInput) -> proc_macro2::TokenStream {
     let field_iter = get_field_iter(input);
     let setter_iter = field_iter.map(|f| {
         let field = f.clone();
-        let name = field.ident;
+        let name = field.ident.unwrap();
         let ty = field.ty;
         quote! {
             fn #name(&mut self, #name: #ty) -> &mut Self {
@@ -101,6 +103,41 @@ fn gen_builder_setter(input: &DeriveInput) -> proc_macro2::TokenStream {
     quote! {
         impl #builder_name {
             #(#setter_iter)*
+        }
+    }
+}
+
+fn gen_builder_impl(input: &DeriveInput) -> proc_macro2::TokenStream {
+    let (origin_name, builder_name) = gen_name(&input);
+    let field_iter = get_field_iter(input);
+    // fn build
+    // fields checked not none and same name variable assigned
+    // eg. let executable = self.executable;
+    let check_field_not_none = field_iter.map(|f| {
+        let name = f.ident.clone().unwrap();
+        let name_string = name.to_string();
+        quote! {
+            if self.#name == None {
+                let err_msg = format!("field {} not set", #name_string);
+                return Err(err_msg.into());
+            }
+            let #name = self.#name.clone().unwrap();
+        }
+    });
+    let names = get_field_iter(input).map(|f| f.ident.clone().unwrap());
+    let fn_build = quote! {
+        pub fn build(&mut self) -> Result<Command, Box<dyn std::error::Error>> {
+            #(#check_field_not_none)*
+            let cmd = #origin_name {
+                #(#names,)
+                *
+            };
+            Ok(cmd)
+        }
+    };
+    quote! {
+        impl #builder_name {
+            #fn_build
         }
     }
 }
