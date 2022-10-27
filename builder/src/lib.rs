@@ -1,11 +1,12 @@
 use proc_macro::TokenStream;
 
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, ToTokens};
+use syn::parse::Parse;
 use syn::{
     parse_macro_input, punctuated::Punctuated, token::Comma, Data, DeriveInput, Field, Ident, Type,
 };
 
-use syn::{GenericArgument, Path, PathArguments, PathSegment};
+use syn::{GenericArgument, Path, PathArguments, PathSegment, Attribute, MetaNameValue, Meta};
 
 fn extract_type_path(ty: &syn::Type) -> Option<&Path> {
     match *ty {
@@ -14,37 +15,44 @@ fn extract_type_path(ty: &syn::Type) -> Option<&Path> {
     }
 }
 
-fn extract_option_segment(path: &Path) -> Option<&PathSegment> {
-    let idents_of_path = path
+fn extract_container_segment<'a>(path: &'a Path, check_list: &[&str]) -> Option<&'a PathSegment> {
+    let idents_list: Vec<String> = path
         .segments
         .iter()
-        .into_iter()
-        .fold(String::new(), |mut acc, v| {
-            acc.push_str(&v.ident.to_string());
-            acc.push('|');
-            acc
-        });
-    vec!["Option|", "std|option|Option|", "core|option|Option|"]
-        .into_iter()
-        .find(|s| &idents_of_path == *s)
+        .map(|ps| ps.ident.to_string())
+        .collect();
+    let idents_of_path = idents_list.join("::");
+    check_list
+        .iter()
+        .find(|&&s| &idents_of_path == s)
         .and_then(|_| path.segments.last())
 }
 
-fn extract_type_from_option(ty: &Type) -> Option<&Type> {
+fn extract_first_generic_param<'a>(ty: &'a Type, check_list: &[&str]) -> Option<&'a Type> {
     extract_type_path(ty)
-        .and_then(|path| extract_option_segment(path))
-        .and_then(|path_seg| {
-            let type_params = &path_seg.arguments;
-            // It should have only on angle-bracketed param ("<String>"):
-            match *type_params {
-                PathArguments::AngleBracketed(ref params) => params.args.first(),
-                _ => None,
-            }
-        })
-        .and_then(|generic_arg| match *generic_arg {
-            GenericArgument::Type(ref ty) => Some(ty),
+    .and_then(|path| extract_container_segment(path, check_list))
+    .and_then(|path_seg| {
+        let type_params = &path_seg.arguments;
+        // It should have only on angle-bracketed param ("<String>"):
+        match *type_params {
+            PathArguments::AngleBracketed(ref params) => params.args.first(),
             _ => None,
-        })
+        }
+    })
+    .and_then(|generic_arg| match *generic_arg {
+        GenericArgument::Type(ref ty) => Some(ty),
+        _ => None,
+    })
+}
+
+fn extract_type_from_option(ty: &Type) -> Option<&Type> {
+    let check_list = vec!["Option", "std::option::Option", "core::option::Option"];
+    extract_first_generic_param(ty, &check_list)
+}
+
+fn extract_type_from_vector(ty: &Type) -> Option<&Type> {
+    let check_list = vec!["Vec", "std::vec::Vec"];
+    extract_first_generic_param(ty,&check_list)
 }
 
 struct Helper {
@@ -120,6 +128,8 @@ impl Helper {
 
     fn gen_builder_setter(&self) -> proc_macro2::TokenStream {
         let setter_iter = self.named.iter().map(|f| {
+            let attrs = &f.attrs;
+            test_attr(attrs);
             let name = f.ident.as_ref().expect("named field");
             let ty = &f.ty;
             let inner_opt_ty = extract_type_from_option(ty);
@@ -202,7 +212,30 @@ impl Helper {
     }
 }
 
-#[proc_macro_derive(Builder)]
+fn test_attr(attrs: &[Attribute]) {
+    println!("!!!!!");
+    for attr in attrs {
+        let meta = attr.parse_meta().expect("wrong usage of attribute");
+        let path = meta.path();
+        match &meta {
+            syn::Meta::List(li) => {
+                // nv.path => `each`
+                // nv.eq_token => `=`
+                // nv.lit => `env` | `arg`
+                let data = &li.nested;
+                let nv: MetaNameValue = syn::parse_quote!(#data);
+                let data = nv.path;
+                println!("nv's data: {}", quote!(#data)); // this shows each
+            },
+            _ => panic!("expect name value"),
+        }
+        // println!("tokens = {}", quote!(#tokens));
+        println!("path = {}", quote!(#path)); // this shows `builder`
+    }
+    println!("-=-=-=-=-=-=\n");
+}
+
+#[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: TokenStream) -> TokenStream {
     // Parse the input tokens into a syntax tree.
     let input = parse_macro_input!(input as DeriveInput);

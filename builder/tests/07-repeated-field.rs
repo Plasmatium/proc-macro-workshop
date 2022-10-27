@@ -44,8 +44,8 @@ pub struct Command {
 fn main() {
     let command = Command::builder()
         .executable("cargo".to_owned())
-        .arg("build".to_owned())
-        .arg("--release".to_owned())
+        // .arg("build".to_owned())
+        // .arg("--release".to_owned())
         .build()
         .unwrap();
 
