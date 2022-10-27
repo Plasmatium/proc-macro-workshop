@@ -5,12 +5,6 @@ use syn::{
     parse_macro_input, punctuated::Punctuated, token::Comma, Data, DeriveInput, Field, Ident, Type,
 };
 
-use lazy_static::lazy_static;
-use regex::Regex;
-lazy_static! {
-    static ref _OPTION_CHECKER_RE: Regex = Regex::new(r".*Option < \w+ >$").unwrap();
-}
-
 use syn::{GenericArgument, Path, PathArguments, PathSegment};
 
 fn extract_type_path(ty: &syn::Type) -> Option<&Path> {
@@ -36,7 +30,7 @@ fn extract_option_segment(path: &Path) -> Option<&PathSegment> {
         .and_then(|_| path.segments.last())
 }
 
-fn extract_type_from_option(ty: &Type) -> Option<&Path> {
+fn extract_type_from_option(ty: &Type) -> Option<&Type> {
     extract_type_path(ty)
         .and_then(|path| extract_option_segment(path))
         .and_then(|path_seg| {
@@ -82,9 +76,13 @@ impl Helper {
     fn gen_builder_struct(&self) -> proc_macro2::TokenStream {
         let opt_field_iter = self.named.iter().map(|f| {
             let field_name = f.ident.as_ref().expect("named field");
-            let typ = &f.ty;
+            let ty = &f.ty;
+            let refined_ty = match extract_type_from_option(ty) {
+                Some(_) => quote!(#ty),
+                None => quote!(Option<#ty>),
+            };
             quote! {
-                #field_name: Option<#typ>,
+                #field_name: #refined_ty,
             }
         });
         let builder_name = &self.builder_name;
@@ -97,7 +95,7 @@ impl Helper {
         }
     }
 
-    fn gen_impl(&self) -> proc_macro2::TokenStream {
+    fn gen_struct_impl(&self) -> proc_macro2::TokenStream {
         let field_asign_none_value = self.named.iter().map(|f| {
             let name = f.ident.as_ref().expect("named field");
             quote! {
@@ -124,8 +122,13 @@ impl Helper {
         let setter_iter = self.named.iter().map(|f| {
             let name = f.ident.as_ref().expect("named field");
             let ty = &f.ty;
+            let inner_opt_ty = extract_type_from_option(ty);
+            let setter_ty = match inner_opt_ty {
+                Some(inner) => inner,
+                None => ty,
+            };
             quote! {
-                fn #name(&mut self, #name: #ty) -> &mut Self {
+                fn #name(&mut self, #name: #setter_ty) -> &mut Self {
                     self.#name = Some(#name);
                     self
                 }
@@ -149,7 +152,8 @@ impl Helper {
         // fields checked not none and same name variable assigned
         // eg. let executable = self.executable;
         let checker = self.gen_field_opt_checker();
-        let names = self.named.iter().map(|f| f.ident.clone().unwrap());
+        let names = self.named.iter().map(
+            |f| f.ident.clone().expect("need named field"));
         let fn_build = quote! {
             pub fn build(&mut self) -> Result<Command, Box<dyn std::error::Error>> {
                 #(#checker)*
@@ -171,27 +175,22 @@ impl Helper {
         self.named.iter().map(|f| {
             let ty = &f.ty;
             let name = f.ident.as_ref().expect("should be named field");
-            let name_string = name.to_string();
-            if !is_ty_opt(ty) {
-                // not optional, check not none
-                quote! {
-                    if self.#name == None {
-                        let err_msg = format!("field {} not set", #name_string);
-                        return Err(err_msg.into());
-                    }
-                    let #name = self.#name.clone().unwrap();
-                } 
-            } else {
-                quote! {
-                    let #name = self.#name.clone().unwrap();
-                }
+            let err_msg = format!("fields {name} required");
+            let if_inner_opt_ty = extract_type_from_option(ty);
+            match if_inner_opt_ty {
+                None => quote! {
+                    let #name = self.#name.clone().expect(#err_msg);
+                },
+                Some(_) => quote! {
+                    let #name = self.#name.clone();
+                },
             }
         })
     }
 
     fn gen_expanded(&self) -> proc_macro2::TokenStream {
         let builder_struct = self.gen_builder_struct();
-        let implementation = self.gen_impl();
+        let implementation = self.gen_struct_impl();
         let builder_setter = self.gen_builder_setter();
         let builder_impl = self.gen_builder_impl();
         quote! {
@@ -201,11 +200,6 @@ impl Helper {
             #builder_impl
         }
     }
-}
-
-fn is_ty_opt(ty: &Type) -> bool {
-    let ty_str = quote!(#ty).to_string();
-    _OPTION_CHECKER_RE.is_match(&ty_str)
 }
 
 #[proc_macro_derive(Builder)]
