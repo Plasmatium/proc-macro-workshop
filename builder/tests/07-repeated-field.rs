@@ -35,6 +35,7 @@ use derive_builder::Builder;
 pub struct Command {
     executable: String,
     #[builder(each = "arg")]
+    #[builder(each = "arg_alias")]
     args: Vec<String>,
     #[builder(each = "env")]
     env: Vec<String>,
@@ -45,7 +46,7 @@ fn main() {
     let command = Command::builder()
         .executable("cargo".to_owned())
         .arg("build".to_owned())
-        .arg("--release".to_owned())
+        .arg_alias("--release".to_owned())
         .build()
         .unwrap();
 
